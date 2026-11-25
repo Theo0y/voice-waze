@@ -1,7 +1,8 @@
-# Dépôt Git indépendant (en attendant la fusion)
+# Fichiers et outils conservés uniquement en local
 
-# Maintenu en LOCAL, ignoré par Git.
 outputs/
+.venv/
+tools/ffmpeg/
 
 # Fichiers MP3 temporaires de préparation
 **/mp3_upload/input_packs/
