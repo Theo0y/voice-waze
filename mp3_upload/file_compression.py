@@ -14,6 +14,9 @@ import os
 import shutil
 import time
 from multiprocessing import Pool
+
+# from sympy import false
+
 from ffmpeg_utils import configure_ffmpeg_for_pydub
 
 configure_ffmpeg_for_pydub()
@@ -26,7 +29,7 @@ TARGET_BITRATE = 128              # kbps (upper bound)
 MIN_BITRATE = 16                 # kbps (lower bound)
 TARGET_SAMPLE_RATE = 44100
 TARGET_AUDIO_CHANNELS = 1        # mono
-TARGET_VOLUME_INCREASE = 7.0     # dB
+TARGET_VOLUME_INCREASE = 0.0     # dB
 TARGET_FOLDER_SIZE = 0.795       # MB
 VALID_FILENAMES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'valid_waze_filenames.txt')
 
@@ -134,7 +137,7 @@ def compress_pack(pack_path, output_root):
     if initial_size <= TARGET_FOLDER_SIZE:
         shutil.copytree(pristine_path, working_path)
         print(f" - 📦 Already within limit ({initial_size:.2f} MB)")
-        return
+        return True
 
     # Binary search bitrate
     low = MIN_BITRATE
@@ -172,14 +175,15 @@ def compress_pack(pack_path, output_root):
         )
         print(f" - ⚠️ Original backup preserved: {pristine_path}")
         print(f" - ⚠️ Working files preserved: {working_path}")
-        return
+        return False
 
 
 
     print(f" - 🎯 Best bitrate: {best_bitrate}k")
     print(f" - 📦 Final size: {final_size:.2f} MB")
 
-    shutil.rmtree(pristine_path)
+    # shutil.rmtree(pristine_path)
+    return True
 
 
 # ============================
@@ -216,11 +220,16 @@ def compress_mp3_packs(mp3_pack_paths):
 
     print(f"\n📁 Output directory: {output_root}")
 
+    failed_packs = []
+
     for pack in mp3_pack_paths:
-        compress_pack(pack, output_root)
+        if not compress_pack(pack, output_root):
+            failed_packs.append(os.path.basename(pack))
 
-    cleanup_orphaned_pack_dirs(output_root)
-
+    if failed_packs:
+        raise RuntimeError(
+            "Échec de compression pour : " + ", ".join(failed_packs)
+        )
 
 
 # ============================

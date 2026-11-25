@@ -8,7 +8,7 @@ MP3_UPLOAD_DIR = SCRIPT_DIR / "mp3_upload"
 
 import os
 
-FFMPEG_DIR = SCRIPT_DIR / "tools" / "ffmpeg" / "ffmpeg-9.1-essentials_build" / "bin"
+FFMPEG_DIR = SCRIPT_DIR.parent / "tools" / "ffmpeg" / "ffmpeg-9.1-essentials_build" / "bin"
 
 os.environ["FFMPEG_BINARY"] = str(FFMPEG_DIR / "ffmpeg.exe")
 os.environ["FFPROBE_BINARY"] = str(FFMPEG_DIR / "ffprobe.exe")
