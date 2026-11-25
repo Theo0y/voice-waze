@@ -1,0 +1,12 @@
+*.mp3
+.DS_Store
+*.exe
+*.zip
+*.pyc
+*.gz
+dex.py
+*.venv
+*.wav
+helper_files/README.md
+voices/
+downloaded_packs/
