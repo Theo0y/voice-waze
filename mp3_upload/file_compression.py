@@ -89,13 +89,27 @@ def compress_pack(pack_path, output_root):
     pristine_path = os.path.join(output_root, f"{pack_name}__ORIGINAL")
     working_path = os.path.join(output_root, pack_name)
 
-    if os.path.exists(pristine_path):
-        shutil.rmtree(pristine_path)
+    # if os.path.exists(pristine_path):
+    #     shutil.rmtree(pristine_path)
+    #
+    # if os.path.exists(working_path):
+    #     shutil.rmtree(working_path)
 
-    if os.path.exists(working_path):
-        shutil.rmtree(working_path)
+    if os.path.exists(pristine_path) or os.path.exists(working_path):
+        raise FileExistsError(
+            f"Un dossier de sortie existe déjà pour {pack_name}.\n"
+            "Aucun fichier ne sera supprimé."
+        )
 
-    shutil.copytree(pack_path, pristine_path)
+    # shutil.copytree(pack_path, pristine_path)
+
+    os.makedirs(pristine_path)
+
+    for filename in VALID_WAZE_FILENAMES:
+        src = os.path.join(pack_path, filename)
+
+        if os.path.isfile(src):
+            shutil.copy2(src, pristine_path)
 
     def regenerate_at_bitrate(bitrate):
         if os.path.exists(working_path):
@@ -142,14 +156,25 @@ def compress_pack(pack_path, output_root):
 
     final_size = regenerate_at_bitrate(best_bitrate)
 
+    # if final_size >= TARGET_FOLDER_SIZE:
+    #     print(
+    #         f" - ❌ Compression failed: final size {final_size:.2f} MB "
+    #         f"exceeds limit ({TARGET_FOLDER_SIZE:.2f} MB). Removing pack."
+    #     )
+    #     shutil.rmtree(working_path)
+    #     shutil.rmtree(pristine_path)
+    #     return
+
     if final_size >= TARGET_FOLDER_SIZE:
         print(
             f" - ❌ Compression failed: final size {final_size:.2f} MB "
-            f"exceeds limit ({TARGET_FOLDER_SIZE:.2f} MB). Removing pack."
+            f"exceeds limit ({TARGET_FOLDER_SIZE:.2f} MB)."
         )
-        shutil.rmtree(working_path)
-        shutil.rmtree(pristine_path)
+        print(f" - ⚠️ Original backup preserved: {pristine_path}")
+        print(f" - ⚠️ Working files preserved: {working_path}")
         return
+
+
 
     print(f" - 🎯 Best bitrate: {best_bitrate}k")
     print(f" - 📦 Final size: {final_size:.2f} MB")
@@ -161,12 +186,32 @@ def compress_pack(pack_path, output_root):
 # Public entry point
 # ============================
 
+# def compress_mp3_packs(mp3_pack_paths):
+#     root = os.path.dirname(os.path.abspath(__file__))
+#     output_root = os.path.join(root, 'compressed_packs')
+#
+#     if os.path.exists(output_root):
+#         shutil.rmtree(output_root)
+#     os.makedirs(output_root)
+#
+#     print(f"\n📁 Output directory: {output_root}")
+#
+#     for pack in mp3_pack_paths:
+#         compress_pack(pack, output_root)
+#
+#     cleanup_orphaned_pack_dirs(output_root)
+
+
 def compress_mp3_packs(mp3_pack_paths):
     root = os.path.dirname(os.path.abspath(__file__))
     output_root = os.path.join(root, 'compressed_packs')
 
     if os.path.exists(output_root):
-        shutil.rmtree(output_root)
+        raise FileExistsError(
+            f"Le dossier de sortie existe déjà : {output_root}\n"
+            "Aucun fichier ne sera supprimé."
+        )
+
     os.makedirs(output_root)
 
     print(f"\n📁 Output directory: {output_root}")
@@ -175,6 +220,7 @@ def compress_mp3_packs(mp3_pack_paths):
         compress_pack(pack, output_root)
 
     cleanup_orphaned_pack_dirs(output_root)
+
 
 
 # ============================
