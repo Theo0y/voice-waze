@@ -1,0 +1,292 @@
+"""
+mp3_upload.file_compression
+
+Deterministic MP3 pack compression for Waze-style limits.
+
+Algorithm:
+- Preserve pristine originals for every pack
+- For each bitrate attempt, regenerate outputs from originals
+- Binary-search bitrate so total pack size <= TARGET_FOLDER_SIZE
+- Deterministic + monotonic behavior (lower bitrate => smaller size)
+"""
+
+import os
+import shutil
+import time
+from multiprocessing import Pool
+
+# from sympy import false
+
+from ffmpeg_utils import configure_ffmpeg_for_pydub
+
+configure_ffmpeg_for_pydub()
+from pydub import AudioSegment
+
+# ============================
+# Compression parameters
+# ============================
+TARGET_BITRATE = 128              # kbps (upper bound)
+MIN_BITRATE = 16                 # kbps (lower bound)
+TARGET_SAMPLE_RATE = 44100
+TARGET_AUDIO_CHANNELS = 1        # mono
+TARGET_VOLUME_INCREASE = 0.0     # dB
+TARGET_FOLDER_SIZE = 0.795       # MB
+VALID_FILENAMES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'valid_waze_filenames.txt')
+
+# ============================
+# Helpers
+# ============================
+
+
+def load_valid_waze_filenames(path=None):
+    path = path or VALID_FILENAMES_FILE
+    with open(path, 'r') as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+VALID_WAZE_FILENAMES = load_valid_waze_filenames()
+
+
+def is_valid_waze_mp3(filename):
+    return filename.endswith('.mp3') and filename in VALID_WAZE_FILENAMES
+
+
+def get_folder_size(folder_path, valid_filenames=None):
+    total = 0
+    for root, _, files in os.walk(folder_path):
+        for f in files:
+            if valid_filenames is not None and not (f.endswith('.mp3') and f in valid_filenames):
+                continue
+            total += os.path.getsize(os.path.join(root, f))
+    return total / (1024 * 1024)
+
+
+def convert_mp3(input_path, output_path, bitrate):
+    audio = AudioSegment.from_file(input_path, format="mp3")
+
+    if audio.frame_rate != TARGET_SAMPLE_RATE:
+        audio = audio.set_frame_rate(TARGET_SAMPLE_RATE)
+
+    if audio.channels != TARGET_AUDIO_CHANNELS:
+        audio = audio.set_channels(TARGET_AUDIO_CHANNELS)
+
+    if TARGET_VOLUME_INCREASE:
+        audio = audio + TARGET_VOLUME_INCREASE
+
+    audio.export(output_path, format="mp3", bitrate=f"{bitrate}k")
+
+
+def _convert_worker(args):
+    convert_mp3(*args)
+
+
+# ============================
+# Core algorithm
+# ============================
+
+def compress_pack(pack_path, output_root):
+    pack_name = os.path.basename(pack_path)
+    print(f"\n🔄 Processing pack: {pack_name}")
+
+    # Prepare directories
+    pristine_path = os.path.join(output_root, f"{pack_name}__ORIGINAL")
+    working_path = os.path.join(output_root, pack_name)
+
+    # if os.path.exists(pristine_path):
+    #     shutil.rmtree(pristine_path)
+    #
+    # if os.path.exists(working_path):
+    #     shutil.rmtree(working_path)
+
+    if os.path.exists(pristine_path) or os.path.exists(working_path):
+        raise FileExistsError(
+            f"Un dossier de sortie existe déjà pour {pack_name}.\n"
+            "Aucun fichier ne sera supprimé."
+        )
+
+    # shutil.copytree(pack_path, pristine_path)
+
+    os.makedirs(pristine_path)
+
+    for filename in VALID_WAZE_FILENAMES:
+        src = os.path.join(pack_path, filename)
+
+        if os.path.isfile(src):
+            shutil.copy2(src, pristine_path)
+
+    def regenerate_at_bitrate(bitrate):
+        if os.path.exists(working_path):
+            shutil.rmtree(working_path)
+        shutil.copytree(pristine_path, working_path)
+
+        tasks = []
+        for filename in os.listdir(pristine_path):
+            if not is_valid_waze_mp3(filename):
+                continue
+            src = os.path.join(pristine_path, filename)
+            dst = os.path.join(working_path, filename)
+            tasks.append((src, dst, bitrate))
+
+        with Pool() as pool:
+            pool.map(_convert_worker, tasks)
+
+        return get_folder_size(working_path, valid_filenames=VALID_WAZE_FILENAMES)
+
+    # Initial size check
+    initial_size = get_folder_size(pristine_path, valid_filenames=VALID_WAZE_FILENAMES)
+    if initial_size <= TARGET_FOLDER_SIZE:
+        shutil.copytree(pristine_path, working_path)
+        print(f" - 📦 Already within limit ({initial_size:.2f} MB)")
+        return True
+
+    # Binary search bitrate
+    low = MIN_BITRATE
+    high = TARGET_BITRATE
+    best_bitrate = TARGET_BITRATE
+
+    while low <= high:
+        mid = (low + high) // 2
+        size = regenerate_at_bitrate(mid)
+
+        print(f"   🔍 {mid}k → {size:.2f} MB")
+
+        if size > TARGET_FOLDER_SIZE:
+            high = mid - 1      # too big → reduce bitrate
+        else:
+            best_bitrate = mid # valid → try higher quality
+            low = mid + 1
+
+
+    final_size = regenerate_at_bitrate(best_bitrate)
+
+    # if final_size >= TARGET_FOLDER_SIZE:
+    #     print(
+    #         f" - ❌ Compression failed: final size {final_size:.2f} MB "
+    #         f"exceeds limit ({TARGET_FOLDER_SIZE:.2f} MB). Removing pack."
+    #     )
+    #     shutil.rmtree(working_path)
+    #     shutil.rmtree(pristine_path)
+    #     return
+
+    if final_size >= TARGET_FOLDER_SIZE:
+        print(
+            f" - ❌ Compression failed: final size {final_size:.2f} MB "
+            f"exceeds limit ({TARGET_FOLDER_SIZE:.2f} MB)."
+        )
+        print(f" - ⚠️ Original backup preserved: {pristine_path}")
+        print(f" - ⚠️ Working files preserved: {working_path}")
+        return False
+
+
+
+    print(f" - 🎯 Best bitrate: {best_bitrate}k")
+    print(f" - 📦 Final size: {final_size:.2f} MB")
+
+    # shutil.rmtree(pristine_path)
+    return True
+
+
+# ============================
+# Public entry point
+# ============================
+
+# def compress_mp3_packs(mp3_pack_paths):
+#     root = os.path.dirname(os.path.abspath(__file__))
+#     output_root = os.path.join(root, 'compressed_packs')
+#
+#     if os.path.exists(output_root):
+#         shutil.rmtree(output_root)
+#     os.makedirs(output_root)
+#
+#     print(f"\n📁 Output directory: {output_root}")
+#
+#     for pack in mp3_pack_paths:
+#         compress_pack(pack, output_root)
+#
+#     cleanup_orphaned_pack_dirs(output_root)
+
+
+def compress_mp3_packs(mp3_pack_paths):
+    root = os.path.dirname(os.path.abspath(__file__))
+    output_root = os.path.join(root, 'compressed_packs')
+
+    if os.path.exists(output_root):
+        raise FileExistsError(
+            f"Le dossier de sortie existe déjà : {output_root}\n"
+            "Aucun fichier ne sera supprimé."
+        )
+
+    os.makedirs(output_root)
+
+    print(f"\n📁 Output directory: {output_root}")
+
+    failed_packs = []
+
+    for pack in mp3_pack_paths:
+        if not compress_pack(pack, output_root):
+            failed_packs.append(os.path.basename(pack))
+
+    if failed_packs:
+        raise RuntimeError(
+            "Échec de compression pour : " + ", ".join(failed_packs)
+        )
+
+
+# ============================
+# Cleanup helpers
+# ============================
+
+def cleanup_orphaned_pack_dirs(output_root):
+    """
+    Remove orphaned or duplicate pack directories such as:
+    - "Pack Name 2", "Pack Name 3"
+    - "__ORIGINAL", "__ORIGINAL 2"
+
+    These can be left behind if a run exits early or copytree
+    collides with an existing directory.
+    """
+    print("\n🧹 Starting cleanup of orphaned pack directories...")
+    time.sleep(12)  # Wait a moment to ensure all file operations are done
+    print("🧹 Cleaning orphaned pack directories...")
+
+    entries = os.listdir(output_root)
+    to_delete = []
+
+    for name in entries:
+        path = os.path.join(output_root, name)
+
+        # Skip non-directories
+        if not os.path.isdir(path):
+            continue
+
+        # Delete any __ORIGINAL folders
+        if "__ORIGINAL" in name:
+            to_delete.append(path)
+            continue
+
+        # Delete Finder-style duplicates: "Name 2", "Name 3", etc.
+        parts = name.rsplit(" ", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            base_name = parts[0]
+            base_path = os.path.join(output_root, base_name)
+            if os.path.exists(base_path):
+                to_delete.append(path)
+
+    for path in to_delete:
+        print(f" - Removing orphaned folder: {os.path.basename(path)}")
+        shutil.rmtree(path, ignore_errors=True)
+
+    if not to_delete:
+        print(" - No orphaned folders found")
+
+# ============================
+# Example usage
+# ============================
+if __name__ == '__main__':
+    import file_ingestion
+
+    input_directory = os.path.join(os.getcwd(), 'mp3_upload', 'input_packs')
+    valid_filenames_file = os.path.join(os.getcwd(), 'mp3_upload', 'valid_waze_filenames.txt')
+
+    packs = file_ingestion.ingest_mp3_packs(input_directory, valid_filenames_file)
+    compress_mp3_packs(packs)
