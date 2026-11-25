@@ -1,1 +1,9 @@
+# Dépôt Git indépendant (en attendant la fusion)
 waze-voicepack-links/
+
+# Maintenu en LOCAL, ignoré par Git.
+outputs/
+
+# Fichiers MP3 temporaires de préparation
+**/mp3_upload/input_packs/
+**/mp3_upload/compressed_packs/
